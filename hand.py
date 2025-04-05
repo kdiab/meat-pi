@@ -2,13 +2,10 @@ import cv2
 import mediapipe as mp
 import time
 import numpy as np
-import threading
-from queue import Queue
 
 class HandDetector:
-    def __init__(self, capture_width=320, capture_height=240, display_width=640, display_height=480, max_hands=1, min_detection_confidence=0.3, min_tracking_confidence=0.3, frame_skip=1):
+    def __init__(self, capture_width=640, capture_height=480, display_width=1920, display_height=1080, max_hands=1, min_detection_confidence=0.3, min_tracking_confidence=0.3):
         self.cap = cv2.VideoCapture(0)
-        self.frame_skip = frame_skip
         
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, capture_width)
         self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, capture_height)
@@ -29,9 +26,7 @@ class HandDetector:
             min_tracking_confidence=min_tracking_confidence
         )
         
-        self.prev_frame_time = 0
-        self.new_frame_time = 0
-        
+        # Hand landmark indices
         self.WRIST = 0
         self.THUMB_TIP = 4
         self.INDEX_FINGER_TIP = 8
@@ -39,29 +34,23 @@ class HandDetector:
         self.RING_FINGER_TIP = 16
         self.PINKY_TIP = 20
         
-        self.frame_queue = Queue(maxsize=1)
-        self.result_queue = Queue(maxsize=1)
-        self.stopped = False
+        # FPS calculation
+        self.prev_time = 0
         
         cv2.namedWindow("Hand Tracking", cv2.WINDOW_NORMAL)
-        
-    def process_thread(self):
-        """Thread for processing frames"""
-        while not self.stopped:
-            if not self.frame_queue.empty():
-                frame = self.frame_queue.get()
-                
-                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                
-                rgb_frame = cv2.convertScaleAbs(rgb_frame, alpha=1.5, beta=10)
-                
-                results = self.hands.process(rgb_frame)
-                
-                if not self.result_queue.full():
-                    self.result_queue.put((frame, results))
-            else:
-                time.sleep(0.001)
     
+    def process_frame(self, frame):
+        # Convert to RGB for MediaPipe
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        
+        # Enhance contrast for better detection
+        rgb_frame = cv2.convertScaleAbs(rgb_frame, alpha=1.5, beta=10)
+        
+        # Process the frame
+        results = self.hands.process(rgb_frame)
+        
+        return results
+           
     def find_hand(self, frame, results):
         """Process results and draw landmarks"""
         hand_position = None
@@ -111,62 +100,53 @@ class HandDetector:
             print("Error: Could not open camera.")
             return
         
-        processing_thread = threading.Thread(target=self.process_thread)
-        processing_thread.daemon = True
-        processing_thread.start()
-        
         print("Press 'q' to quit")
         
         while True:
+            # Capture frame
             ret, frame = self.cap.read()
             if not ret:
                 print("Error: Failed to capture frame.")
                 break
             
-            frame = cv2.flip(frame, 1)
+            # Process frame with MediaPipe
+            results = self.process_frame(frame)
             
-            if not self.frame_queue.full():
-                self.frame_queue.put(frame)
+            # Draw landmarks and get hand position
+            display_frame, hand_position = self.find_hand(frame, results)
             
-            display_frame = None
-            hand_position = None
-
-            if not self.result_queue.empty():
-                processed_frame, results = self.result_queue.get()
-                display_frame, hand_position = self.find_hand(processed_frame, results)
-            else:
-                display_frame = cv2.resize(frame, (self.display_width, self.display_height), 
-                                          interpolation=cv2.INTER_LINEAR)
-                hand_position = None
-            
+            # Show hand position if detected
             if hand_position:
                 x, y = hand_position
                 print(f"Hand position: X={x}, Y={y}")
-                
+               
                 display_x = int(x * (self.display_width / self.capture_width))
                 display_y = int(y * (self.display_height / self.capture_height))
                 
-                cv2.putText(display_frame, f"X: {display_x}, Y: {display_y}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.putText(display_frame, f"X: {display_x}, Y: {display_y}", (10, 70), 
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+            
             # ADD MIDI LOGIC HERE
             
+            # Display the processed frame
             cv2.imshow("Hand Tracking", display_frame)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
         
-        self.stopped = True
+        # Clean up
         self.cap.release()
         cv2.destroyAllWindows()
+        self.hands.close()
 
 if __name__ == "__main__":
     detector = HandDetector(
-        capture_width=320,
-        capture_height=240,
+        capture_width=640,
+        capture_height=480,
         display_width=1920,
         display_height=1080,
         max_hands=1,
         min_detection_confidence=0.3,
         min_tracking_confidence=0.3,
-        frame_skip = 1
     )
     detector.run()
