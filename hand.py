@@ -117,7 +117,6 @@ class HandDetector:
         
         print("Press 'q' to quit")
         
-        frame_counter = 0
         while True:
             ret, frame = self.cap.read()
             if not ret:
@@ -129,37 +128,25 @@ class HandDetector:
             if not self.frame_queue.full():
                 self.frame_queue.put(frame)
             
-            frame_counter += 1
-            if frame_counter % self.frame_skip != 0:  
+            display_frame = None
+            hand_position = None
+
+            if not self.result_queue.empty():
+                processed_frame, results = self.result_queue.get()
+                display_frame, hand_position = self.find_hand(processed_frame, results)
+            else:
                 display_frame = cv2.resize(frame, (self.display_width, self.display_height), 
                                           interpolation=cv2.INTER_LINEAR)
                 hand_position = None
-            else:
-                if not self.result_queue.empty():
-                    processed_frame, results = self.result_queue.get()
-                    display_frame, hand_position = self.find_hand(processed_frame, results)
-                else:
-                    display_frame = cv2.resize(frame, (self.display_width, self.display_height), 
-                                              interpolation=cv2.INTER_LINEAR)
-                    hand_position = None
-            
-            self.new_frame_time = time.time()
-            fps = 1/(self.new_frame_time - self.prev_frame_time) if self.prev_frame_time else 0
-            self.prev_frame_time = self.new_frame_time
-            
-            cv2.putText(display_frame, f"FPS: {int(fps)}", (10, 30), 
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
             if hand_position:
                 x, y = hand_position
-                if frame_counter % 10 == 0:
-                    print(f"Hand position: X={x}, Y={y}")
+                print(f"Hand position: X={x}, Y={y}")
                 
                 display_x = int(x * (self.display_width / self.capture_width))
                 display_y = int(y * (self.display_height / self.capture_height))
                 
-                cv2.putText(display_frame, f"X: {display_x}, Y: {display_y}", (10, 70), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                cv2.putText(display_frame, f"X: {display_x}, Y: {display_y}", (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
             # ADD MIDI LOGIC HERE
             
             cv2.imshow("Hand Tracking", display_frame)
