@@ -6,28 +6,28 @@ import threading
 from queue import Queue
 
 class HandDetector:
-    def __init__(self, display_width=640, display_height=480, process_width=480, process_height=360, max_hands=1, min_detection_confidence=0.3, min_tracking_confidence=0.3, frame_skip=2):
+    def __init__(self, capture_width=320, capture_height=240, display_width=640, display_height=480, max_hands=1, min_detection_confidence=0.3, min_tracking_confidence=0.3, frame_skip=1):
         self.cap = cv2.VideoCapture(0)
-        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, process_width)
-        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, process_height)
+        self.frame_skip = frame_skip
+        
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, capture_width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, capture_height)
         self.cap.set(cv2.CAP_PROP_FPS, 30)
         
-        self.process_width = process_width
-        self.process_height = process_height
+        self.capture_width = capture_width
+        self.capture_height = capture_height
         
         self.display_width = display_width
         self.display_height = display_height
-        self.frame_skip = frame_skip
         
         self.mp_hands = mp.solutions.hands
         self.hands = self.mp_hands.Hands(
             static_image_mode=False,
             max_num_hands=max_hands,
-            model_complexity=0,  
-            min_detection_confidence=0.3,
-            min_tracking_confidence=0.3 
+            model_complexity=0,
+            min_detection_confidence=min_detection_confidence,
+            min_tracking_confidence=min_tracking_confidence
         )
-        self.mp_draw = mp.solutions.drawing_utils
         
         self.prev_frame_time = 0
         self.new_frame_time = 0
@@ -43,21 +43,19 @@ class HandDetector:
         self.result_queue = Queue(maxsize=1)
         self.stopped = False
         
+        cv2.namedWindow("Hand Tracking", cv2.WINDOW_NORMAL)
+        
     def process_thread(self):
         """Thread for processing frames"""
         while not self.stopped:
             if not self.frame_queue.empty():
                 frame = self.frame_queue.get()
                 
-                process_frame = cv2.resize(frame, (self.process_width, self.process_height))
+                rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 
-                process_frame = cv2.convertScaleAbs(process_frame, alpha=1.5, beta=0)
+                rgb_frame = cv2.convertScaleAbs(rgb_frame, alpha=1.5, beta=10)
                 
-                process_frame = cv2.GaussianBlur(process_frame, (5, 5), 0)
-                
-                process_frame = cv2.cvtColor(process_frame, cv2.COLOR_BGR2RGB)
-                
-                results = self.hands.process(process_frame)
+                results = self.hands.process(rgb_frame)
                 
                 if not self.result_queue.full():
                     self.result_queue.put((frame, results))
@@ -72,10 +70,12 @@ class HandDetector:
         if results.multi_hand_landmarks:
             hand_landmarks = results.multi_hand_landmarks[0]
             
+            h, w = display_frame.shape[:2]
+            
             for landmark in hand_landmarks.landmark:
-                x = int(landmark.x * display_frame.shape[1])
-                y = int(landmark.y * display_frame.shape[0])
-                cv2.circle(display_frame, (x, y), 3, (255, 255, 255), 2)
+                x = int(landmark.x * w)
+                y = int(landmark.y * h)
+                cv2.circle(display_frame, (x, y), 3, (255, 255, 255), -1)
             
             connections = [
                 (self.WRIST, self.THUMB_TIP),
@@ -87,19 +87,22 @@ class HandDetector:
             
             for start_idx, end_idx in connections:
                 start_point = (
-                    int(hand_landmarks.landmark[start_idx].x * display_frame.shape[1]),
-                    int(hand_landmarks.landmark[start_idx].y * display_frame.shape[0])
+                    int(hand_landmarks.landmark[start_idx].x * w),
+                    int(hand_landmarks.landmark[start_idx].y * h)
                 )
                 end_point = (
-                    int(hand_landmarks.landmark[end_idx].x * display_frame.shape[1]),
-                    int(hand_landmarks.landmark[end_idx].y * display_frame.shape[0])
+                    int(hand_landmarks.landmark[end_idx].x * w),
+                    int(hand_landmarks.landmark[end_idx].y * h)
                 )
                 cv2.line(display_frame, start_point, end_point, (255, 255, 255), 2)
             
             wrist = hand_landmarks.landmark[self.WRIST]
-            wrist_x = int(wrist.x * display_frame.shape[1])
-            wrist_y = int(wrist.y * display_frame.shape[0])
+            wrist_x = int(wrist.x * w)
+            wrist_y = int(wrist.y * h)
             hand_position = (wrist_x, wrist_y)
+        
+        display_frame = cv2.resize(display_frame, (self.display_width, self.display_height), 
+                                  interpolation=cv2.INTER_LINEAR)
         
         return display_frame, hand_position
 
@@ -111,6 +114,8 @@ class HandDetector:
         processing_thread = threading.Thread(target=self.process_thread)
         processing_thread.daemon = True
         processing_thread.start()
+        
+        print("Press 'q' to quit")
         
         frame_counter = 0
         while True:
@@ -126,14 +131,16 @@ class HandDetector:
             
             frame_counter += 1
             if frame_counter % self.frame_skip != 0:  
-                display_frame = frame
+                display_frame = cv2.resize(frame, (self.display_width, self.display_height), 
+                                          interpolation=cv2.INTER_LINEAR)
                 hand_position = None
             else:
                 if not self.result_queue.empty():
                     processed_frame, results = self.result_queue.get()
                     display_frame, hand_position = self.find_hand(processed_frame, results)
                 else:
-                    display_frame = frame
+                    display_frame = cv2.resize(frame, (self.display_width, self.display_height), 
+                                              interpolation=cv2.INTER_LINEAR)
                     hand_position = None
             
             self.new_frame_time = time.time()
@@ -148,10 +155,11 @@ class HandDetector:
                 if frame_counter % 10 == 0:
                     print(f"Hand position: X={x}, Y={y}")
                 
-                cv2.putText(display_frame, f"X: {x}, Y: {y}", (10, 70), 
+                display_x = int(x * (self.display_width / self.capture_width))
+                display_y = int(y * (self.display_height / self.capture_height))
+                
+                cv2.putText(display_frame, f"X: {display_x}, Y: {display_y}", (10, 70), 
                            cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            
-            resized_frame = cv2.resize(display_frame, (self.display_width, self.display_height), interpolation=cv2.INTER_LINEAR)
             # ADD MIDI LOGIC HERE
             
             cv2.imshow("Hand Tracking", display_frame)
@@ -165,13 +173,13 @@ class HandDetector:
 
 if __name__ == "__main__":
     detector = HandDetector(
+        capture_width=320,
+        capture_height=240,
         display_width=1920,
         display_height=1080,
-        process_width=480,
-        process_height=360,
         max_hands=1,
         min_detection_confidence=0.3,
         min_tracking_confidence=0.3,
-        frame_skip=1
+        frame_skip = 1
     )
     detector.run()
