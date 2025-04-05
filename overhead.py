@@ -98,7 +98,7 @@ class MediaPipeHeadDetector:
                 try:
                     roi = gray_bgr[y:y+height, x:x+width]
                     if roi.size > 0:
-                        block_size = max(15, min(30, width // 10))
+                        block_size = max(5, min(15, width // 10))
                         
                         h_roi, w_roi = roi.shape[:2]
                         temp_h, temp_w = h_roi // block_size, w_roi // block_size
