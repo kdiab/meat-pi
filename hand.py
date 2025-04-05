@@ -131,6 +131,8 @@ class HandDetector:
             if not ret:
                 print("Error: Failed to capture frame.")
                 break
+
+            frame = cv2.flip(frame, 1)
             
             results = self.process_frame(frame)
             
