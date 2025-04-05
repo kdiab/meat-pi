@@ -2,9 +2,29 @@ import cv2
 import mediapipe as mp
 import time
 import numpy as np
+import mido
 
 class HandDetector:
     def __init__(self, capture_width=640, capture_height=480, display_width=1920, display_height=1080, max_hands=1, min_detection_confidence=0.3, min_tracking_confidence=0.3):
+        try:
+            available_ports = mido.get_output_names()
+            print(available_ports)
+            if available_ports:
+                print(f"Available MIDI ports: {available_ports}")
+                # Connect to the first available port
+                self.midi_out = mido.open_output(available_ports[0])
+                print(f"MIDI connected to: {available_ports[0]}")
+            else:
+                # Create a virtual port if no physical ports are available
+                self.midi_out = mido.open_output('HandTracking', virtual=True)
+                print("No MIDI ports available. Created virtual port: HandTracking")
+            
+            print(f"MIDI initialized successfully")
+        except Exception as e:
+            print(f"MIDI initialization error: {e}")
+            self.midi_out = None
+
+        self.hand_present_last_frame = False
         self.cap = cv2.VideoCapture(0)
         
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, capture_width)
@@ -102,43 +122,74 @@ class HandDetector:
         
         print("Press 'q' to quit")
         
+        frame_count = 0
+        
         while True:
-            # Capture frame
+            frame_count += 1
+            
             ret, frame = self.cap.read()
             if not ret:
                 print("Error: Failed to capture frame.")
                 break
             
-            # Process frame with MediaPipe
             results = self.process_frame(frame)
             
-            # Draw landmarks and get hand position
             display_frame, hand_position = self.find_hand(frame, results)
             
-            # Show hand position if detected
-            if hand_position:
+            current_time = time.time()
+            fps = 1 / (current_time - self.prev_time) if self.prev_time else 0
+            self.prev_time = current_time
+            
+            if hand_position and self.midi_out:
                 x, y = hand_position
-                print(f"Hand position: X={x}, Y={y}")
-               
-                display_x = int(x * (self.display_width / self.capture_width))
-                display_y = int(y * (self.display_height / self.capture_height))
                 
-                cv2.putText(display_frame, f"X: {display_x}, Y: {display_y}", (10, 70), 
-                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
-            
-            # ADD MIDI LOGIC HERE
-            
-            # Display the processed frame
+                # Normalize coordinates to MIDI CC range (0-127)
+                # For X coordinate: map from (0, capture_width) to (0, 127)
+                midi_x = int((x / self.capture_width) * 127)
+                
+                # For Y coordinate: map from (0, capture_height) to (0, 127)
+                # Note: Invert Y so that higher hand position = higher value
+                midi_y = int((1 - (y / self.capture_height)) * 127)
+                
+                # Ensure values are within MIDI range
+                midi_x = max(0, min(127, midi_x))
+                midi_y = max(0, min(127, midi_y))
+                
+                # Send MIDI messages
+                try:
+                    # For X position (CC number 1)
+                    self.midi_out.send(mido.Message('control_change', control=1, value=midi_x))
+                    
+                    # For Y position (CC number 2)
+                    self.midi_out.send(mido.Message('control_change', control=2, value=midi_y))
+                    
+                    # For hand presence - send Note On only when hand first appears
+                    if not self.hand_present_last_frame:
+                        self.midi_out.send(mido.Message('note_on', note=60, velocity=100))
+                        print("Note On sent - Hand detected")
+                        self.hand_present_last_frame = True
+                    
+                    if frame_count % 10 == 0:  # Log only occasionally to avoid console spam
+                        print(f"MIDI CC sent - X: {midi_x}, Y: {midi_y}")
+                except Exception as e:
+                    print(f"MIDI error: {e}")
+            elif self.midi_out:
+                # Send Note Off only when hand disappears
+                if self.hand_present_last_frame:
+                    try:
+                        self.midi_out.send(mido.Message('note_off', note=60, velocity=0))
+                        print("Note Off sent - Hand lost")
+                        self.hand_present_last_frame = False
+                    except Exception as e:
+                        print(f"MIDI error: {e}")
             cv2.imshow("Hand Tracking", display_frame)
             
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
         
-        # Clean up
         self.cap.release()
         cv2.destroyAllWindows()
         self.hands.close()
-
 if __name__ == "__main__":
     detector = HandDetector(
         capture_width=640,
